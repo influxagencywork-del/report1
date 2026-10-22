@@ -123,7 +123,27 @@ function weekdayFactor(platform: Platform, date: ISODate): number {
   return weekend ? 0.85 : 1.05;
 }
 
-const perf: (PerfRow & { adset_name: string })[] = [];
+/** Chia 1 số nguyên theo trọng số, tổng các phần luôn đúng bằng tổng ban đầu (phương pháp dư lớn nhất) */
+function allocate(total: number, weights: number[]): number[] {
+  const sum = weights.reduce((a, b) => a + b, 0) || 1;
+  const raw = weights.map((w) => (total * w) / sum);
+  const out = raw.map(Math.floor);
+  let rest = total - out.reduce((a, b) => a + b, 0);
+  const order = raw.map((r, i) => [r - Math.floor(r), i]).sort((a, b) => b[0] - a[0]);
+  for (let k = 0; rest > 0; k = (k + 1) % order.length, rest--) out[order[k][1]] += 1;
+  return out;
+}
+
+/** Mẫu quảng cáo (ad) cho mỗi ad set Meta */
+const AD_TEMPLATES = [
+  ["Video 15s - Ưu đãi tháng", "Ảnh đơn - Sản phẩm bán chạy"],
+  ["Carousel - Bộ sưu tập mới", "Video 6s - Thương hiệu"],
+];
+
+type PerfInsert = PerfRow & { adset_name: string; ad_id: string; ad_name: string | null };
+const perf: PerfInsert[] = [];
+/** Dòng cấp ad set (trước khi chia xuống ad) — dùng sinh breakdown và từ khóa */
+const adsetDays: PerfInsert[] = [];
 for (const c of CAMPAIGNS) {
   c.adsets.forEach((adsetName, ai) => {
     const adsetId = `${c.campaign_id}${String(ai + 1).padStart(2, "0")}`;
@@ -141,18 +161,189 @@ for (const c of CAMPAIGNS) {
       const link_clicks = Math.round(impressions * c.ctr * noise(0.2));
       const video_views = Math.round(impressions * c.viewRate * noise(0.15));
       const mess = c.platform === "meta" ? Math.round(link_clicks * c.messRate * noise(0.35)) : 0;
-      perf.push({
+      const row: PerfInsert = {
         date,
         platform: c.platform,
         campaign_id: c.campaign_id,
         adset_id: adsetId,
         adset_name: adsetName,
+        ad_id: "",
+        ad_name: null,
         spend,
         impressions,
         link_clicks,
         video_views,
         mess,
+      };
+      adsetDays.push(row);
+      if (c.platform === "google") {
+        perf.push(row); // Google: dữ liệu ở cấp ad group
+        return;
+      }
+      // Meta: chia xuống 2 ad; ad đầu dần chiếm ưu thế (Meta tối ưu phân phối)
+      const share = 0.5 + 0.2 * (di / days.length) + (rand() - 0.5) * 0.1;
+      const w = [share, 1 - share];
+      // Mỗi ad có CTR khác nhau một chút → chia clicks theo trọng số đã điều chỉnh
+      const ctrW = [w[0] * 1.1, w[1] * 0.9];
+      const parts = {
+        spend: allocate(spend, w),
+        impressions: allocate(impressions, w),
+        link_clicks: allocate(link_clicks, ctrW),
+        video_views: allocate(video_views, w),
+        mess: allocate(mess, ctrW),
+      };
+      AD_TEMPLATES[ai % AD_TEMPLATES.length].forEach((adName, k) => {
+        perf.push({
+          ...row,
+          ad_id: `${adsetId}${k + 1}`,
+          ad_name: adName,
+          spend: parts.spend[k],
+          impressions: parts.impressions[k],
+          link_clicks: parts.link_clicks[k],
+          video_views: parts.video_views[k],
+          mess: parts.mess[k],
+        });
       });
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// daily_breakdown (Meta): tuổi × giới tính và region, chia từ tổng campaign / ngày
+// ---------------------------------------------------------------------------
+const AGES = ["18-24", "25-34", "35-44", "45-54", "55-64", "65+"];
+const AGE_W = [0.17, 0.35, 0.26, 0.12, 0.07, 0.03];
+const GENDERS = ["female", "male", "unknown"];
+const GENDER_W = [0.63, 0.34, 0.03];
+const REGIONS: [string, number][] = [
+  ["Ho Chi Minh City", 0.38], ["Hanoi", 0.24], ["Da Nang", 0.06], ["Binh Duong Province", 0.06], ["Dong Nai Province", 0.05],
+  ["Haiphong", 0.04], ["Can Tho", 0.04], ["Khanh Hoa Province", 0.03], ["Ba Ria-Vung Tau Province", 0.03], ["Other", 0.07],
+];
+
+interface BreakdownInsert {
+  date: ISODate;
+  platform: Platform;
+  campaign_id: string;
+  breakdown_type: "age_gender" | "region";
+  value1: string;
+  value2: string;
+  spend: number;
+  impressions: number;
+  link_clicks: number;
+  mess: number;
+}
+const breakdowns: BreakdownInsert[] = [];
+const campaignDays = new Map<string, { date: ISODate; campaign_id: string; spend: number; impressions: number; link_clicks: number; mess: number }>();
+for (const r of adsetDays.filter((x) => x.platform === "meta")) {
+  const k = `${r.campaign_id}|${r.date}`;
+  const t = campaignDays.get(k) ?? { date: r.date, campaign_id: r.campaign_id, spend: 0, impressions: 0, link_clicks: 0, mess: 0 };
+  t.spend += r.spend; t.impressions += r.impressions; t.link_clicks += r.link_clicks; t.mess += r.mess;
+  campaignDays.set(k, t);
+}
+// Mỗi campaign lệch tệp một chút (Lead nghiêng nữ 25-44, Awareness rộng hơn)
+const campaignSkew = new Map(CAMPAIGNS.map((c, i) => [c.campaign_id, { young: 0.8 + 0.1 * (i % 4), female: c.objective_group === "Lead" ? 1.25 : 1 }]));
+for (const t of campaignDays.values()) {
+  const sk = campaignSkew.get(t.campaign_id)!;
+  // tuổi × giới tính
+  const segs: { a: string; g: string; w: number; ctr: number; msg: number }[] = [];
+  AGES.forEach((a, ai) => GENDERS.forEach((g, gi) => {
+    const ageW = AGE_W[ai] * (ai <= 1 ? sk.young : 1);
+    const gW = GENDER_W[gi] * (g === "female" ? sk.female : 1);
+    segs.push({ a, g, w: ageW * gW * noise(0.15), ctr: ai <= 1 ? 1.15 : ai >= 4 ? 0.7 : 1, msg: g === "female" && ai >= 1 && ai <= 2 ? 1.4 : 0.8 });
+  }));
+  const sp = allocate(t.spend, segs.map((x) => x.w));
+  const im = allocate(t.impressions, segs.map((x) => x.w * noise(0.05)));
+  const cl = allocate(t.link_clicks, segs.map((x) => x.w * x.ctr));
+  const ms = allocate(t.mess, segs.map((x) => x.w * x.ctr * x.msg));
+  segs.forEach((x, i) => {
+    if (sp[i] + im[i] + cl[i] + ms[i] === 0) return;
+    breakdowns.push({ date: t.date, platform: "meta", campaign_id: t.campaign_id, breakdown_type: "age_gender", value1: x.a, value2: x.g,
+      spend: sp[i], impressions: im[i], link_clicks: cl[i], mess: ms[i] });
+  });
+  // region
+  const rw = REGIONS.map(([, w]) => w * noise(0.12));
+  const rsp = allocate(t.spend, rw);
+  const rim = allocate(t.impressions, rw.map((w) => w * noise(0.05)));
+  const rcl = allocate(t.link_clicks, rw.map((w, i) => w * (i < 2 ? 1.1 : 0.9)));
+  const rms = allocate(t.mess, rw.map((w, i) => w * (i < 2 ? 1.2 : 0.8)));
+  REGIONS.forEach(([name], i) => {
+    if (rsp[i] + rim[i] + rcl[i] + rms[i] === 0) return;
+    breakdowns.push({ date: t.date, platform: "meta", campaign_id: t.campaign_id, breakdown_type: "region", value1: name, value2: "",
+      spend: rsp[i], impressions: rim[i], link_clicks: rcl[i], mess: rms[i] });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// keyword_performance (Google Search): chia từ tổng ad group / ngày
+// ---------------------------------------------------------------------------
+interface KeywordDef { text: string; match: "EXACT" | "PHRASE" | "BROAD"; w: number; ctr: number; conv: number; qs: number }
+const KEYWORDS: Record<string, KeywordDef[]> = {
+  // Brand - Exact
+  "2100000000301": [
+    { text: "abc fashion", match: "EXACT", w: 0.55, ctr: 1.1, conv: 0.09, qs: 9 },
+    { text: "abc fashion official", match: "EXACT", w: 0.25, ctr: 1.0, conv: 0.08, qs: 8 },
+    { text: "shop abc", match: "EXACT", w: 0.2, ctr: 0.9, conv: 0.06, qs: 7 },
+  ],
+  // Brand - Phrase
+  "2100000000302": [
+    { text: "abc fashion sale", match: "PHRASE", w: 0.4, ctr: 1.05, conv: 0.07, qs: 8 },
+    { text: "đầm abc", match: "PHRASE", w: 0.35, ctr: 1.0, conv: 0.06, qs: 7 },
+    { text: "abc store hcm", match: "PHRASE", w: 0.25, ctr: 0.9, conv: 0.05, qs: 7 },
+  ],
+  // Đầm công sở
+  "2100000000401": [
+    { text: "đầm công sở", match: "PHRASE", w: 0.35, ctr: 1.1, conv: 0.035, qs: 7 },
+    { text: "đầm công sở cao cấp", match: "EXACT", w: 0.2, ctr: 1.3, conv: 0.05, qs: 8 },
+    { text: "váy công sở đẹp", match: "BROAD", w: 0.25, ctr: 0.9, conv: 0.02, qs: 5 },
+    { text: "đầm dự tiệc", match: "BROAD", w: 0.2, ctr: 0.7, conv: 0, qs: 4 }, // cắn tiền, không ra đơn
+  ],
+  // Áo kiểu nữ
+  "2100000000402": [
+    { text: "áo kiểu nữ", match: "PHRASE", w: 0.35, ctr: 1.1, conv: 0.03, qs: 7 },
+    { text: "áo sơ mi nữ", match: "EXACT", w: 0.25, ctr: 1.2, conv: 0.04, qs: 8 },
+    { text: "áo nữ giá rẻ", match: "BROAD", w: 0.22, ctr: 0.8, conv: 0.004, qs: 3 }, // cắn tiền, gần như không ra đơn
+    { text: "thời trang nữ", match: "BROAD", w: 0.18, ctr: 0.75, conv: 0.01, qs: 4 },
+  ],
+};
+
+interface KeywordInsert {
+  date: ISODate;
+  platform: "google";
+  campaign_id: string;
+  ad_group_id: string;
+  keyword_id: string;
+  keyword_text: string;
+  match_type: string;
+  status: string;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  quality_score: number;
+}
+const keywords: KeywordInsert[] = [];
+for (const r of adsetDays) {
+  const defs = KEYWORDS[r.adset_id];
+  if (!defs) continue;
+  const w = defs.map((k) => k.w * noise(0.15));
+  const sp = allocate(r.spend, w);
+  const im = allocate(r.impressions, w.map((x, i) => x / defs[i].ctr)); // từ khóa CTR thấp cần nhiều impressions hơn
+  const cl = allocate(r.link_clicks, w);
+  defs.forEach((k, i) => {
+    keywords.push({
+      date: r.date,
+      platform: "google",
+      campaign_id: r.campaign_id,
+      ad_group_id: r.adset_id,
+      keyword_id: `${r.adset_id}${String(i + 1).padStart(3, "0")}`,
+      keyword_text: k.text,
+      match_type: k.match,
+      status: "ENABLED",
+      spend: sp[i],
+      impressions: im[i],
+      clicks: cl[i],
+      conversions: Math.round(cl[i] * k.conv * noise(0.4)),
+      quality_score: k.qs,
     });
   });
 }
@@ -214,8 +405,8 @@ const targetMonths = monthsInRange(start, end).slice(-3);
 // Hệ số để tạo đủ trạng thái xanh / vàng / đỏ trên bảng KPI
 const KPI_PLAN: Record<"Awareness" | "Traffic" | "Lead", { metric: string; factor: number; budgetFactor: number }> = {
   Awareness: { metric: "impressions", factor: 0.95, budgetFactor: 1.0 },
-  Traffic: { metric: "cpc", factor: 0.9, budgetFactor: 1.08 },
-  Lead: { metric: "cost_per_mess", factor: 0.72, budgetFactor: 0.95 },
+  Traffic: { metric: "link_clicks", factor: 0.9, budgetFactor: 1.08 },
+  Lead: { metric: "mess", factor: 0.72, budgetFactor: 0.95 },
 };
 const roundTo = (v: number, step: number) => Math.round(v / step) * step;
 
@@ -229,13 +420,12 @@ const targetRows = targetMonths.flatMap((m) => {
     const impr = rows.reduce((s, r) => s + r.impressions, 0);
     const clicks = rows.reduce((s, r) => s + r.link_clicks, 0);
     const mess = rows.reduce((s, r) => s + r.mess, 0);
-    const spendMeta = rows.filter((r) => r.platform === "meta").reduce((s, r) => s + r.spend, 0);
     const plan = KPI_PLAN[group];
     const wobble = noise(0.04);
-    let kpi_target: number;
-    if (plan.metric === "impressions") kpi_target = roundTo((impr * scale) / (plan.factor * wobble), 10_000);
-    else if (plan.metric === "cpc") kpi_target = roundTo((spend / clicks) * plan.factor * wobble, 50);
-    else kpi_target = roundTo((spendMeta / mess) * plan.factor * wobble, 1_000);
+    // KPI khối lượng: mục tiêu cả tháng = thực tế ngoại suy ÷ hệ số đạt mong muốn
+    const actual = plan.metric === "impressions" ? impr : plan.metric === "link_clicks" ? clicks : mess;
+    const step = plan.metric === "impressions" ? 10_000 : plan.metric === "link_clicks" ? 100 : 10;
+    const kpi_target = roundTo((actual * scale) / (plan.factor * wobble), step);
     return {
       month: m,
       objective_group: group,
@@ -289,6 +479,8 @@ function writeSql(path: string) {
     `-- Data giả lập: ${start} → ${end} (hôm nay = ${today}). Tạo bởi: npm run seed -- --sql`,
     "-- XÓA data cũ (trừ allowed_users) rồi ghi lại. Chạy trong Supabase → SQL Editor.",
     "begin;",
+    "delete from public.daily_breakdown;",
+    "delete from public.keyword_performance;",
     "delete from public.daily_performance;",
     "delete from public.period_reach;",
     "delete from public.campaigns;",
@@ -297,6 +489,8 @@ function writeSql(path: string) {
     sqlInserts("campaigns", campaignRows),
     sqlInserts("daily_performance", perf as unknown as Record<string, SqlValue>[]),
     sqlInserts("period_reach", reachRows as unknown as Record<string, SqlValue>[]),
+    sqlInserts("daily_breakdown", breakdowns as unknown as Record<string, SqlValue>[]),
+    sqlInserts("keyword_performance", keywords as unknown as Record<string, SqlValue>[]),
     sqlInserts("targets", targetRows as unknown as Record<string, SqlValue>[]),
     sqlInserts(
       "sync_log",
@@ -329,6 +523,8 @@ async function insertChunks(table: string, rows: object[], size = 500) {
 async function main() {
   console.log(`Seed: ${start} → ${end} (hôm nay = ${today})`);
 
+  await must(db.from("daily_breakdown").delete().gte("date", "1900-01-01"), "xóa daily_breakdown");
+  await must(db.from("keyword_performance").delete().gte("date", "1900-01-01"), "xóa keyword_performance");
   await must(db.from("daily_performance").delete().gte("date", "1900-01-01"), "xóa daily_performance");
   await must(db.from("period_reach").delete().gte("id", 0), "xóa period_reach");
   await must(db.from("campaigns").delete().in("platform", ["meta", "google"]), "xóa campaigns");
@@ -338,12 +534,16 @@ async function main() {
   await insertChunks("campaigns", campaignRows);
   await insertChunks("daily_performance", perf);
   await insertChunks("period_reach", reachRows);
+  await insertChunks("daily_breakdown", breakdowns);
+  await insertChunks("keyword_performance", keywords);
   await insertChunks("targets", targetRows);
   await insertChunks("sync_log", syncRows);
 
   console.log(`✓ campaigns: ${CAMPAIGNS.length}`);
   console.log(`✓ daily_performance: ${perf.length}`);
   console.log(`✓ period_reach: ${reachRows.length} (${periods.size} kỳ)`);
+  console.log(`✓ daily_breakdown: ${breakdowns.length}`);
+  console.log(`✓ keyword_performance: ${keywords.length}`);
   console.log(`✓ targets: ${targetRows.length} (${targetMonths.join(", ")})`);
   console.log(`✓ sync_log: ${syncRows.length}`);
 }

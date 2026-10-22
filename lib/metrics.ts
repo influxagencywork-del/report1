@@ -36,6 +36,9 @@ export interface PerfRow {
   campaign_id: string;
   adset_id: string;
   adset_name?: string | null;
+  /** Meta: id mẫu quảng cáo; Google: '' (dữ liệu ở cấp ad group) */
+  ad_id?: string;
+  ad_name?: string | null;
   spend: number;
   impressions: number;
   link_clicks: number;
