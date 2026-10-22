@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { DataTable, type Column, type Row } from "./DataTable";
+import { DataTable, type Column, type Row, type TableFilter } from "./DataTable";
 
 export interface TableTab {
   id: string;
@@ -10,6 +10,8 @@ export interface TableTab {
   rows: Row[];
   totals?: Row | Row[];
   searchKeys?: string[];
+  filters?: TableFilter[];
+  csvFileName?: string;
 }
 
 /** Nhiều bảng chung 1 khung, chuyển bằng tab (vd theo campaign / theo ad set) */
@@ -33,7 +35,17 @@ export function TableTabs({ tabs, initialSort }: { tabs: TableTab[]; initialSort
         ))}
       </div>
       <div role="tabpanel">
-        <DataTable key={tab.id} columns={tab.columns} rows={tab.rows} totals={tab.totals} initialSort={initialSort} searchKeys={tab.searchKeys} />
+        <DataTable
+          key={tab.id}
+          columns={tab.columns}
+          rows={tab.rows}
+          totals={tab.totals}
+          initialSort={initialSort}
+          searchKeys={tab.searchKeys}
+          filters={tab.filters}
+          csvFileName={tab.csvFileName}
+          columnToggle
+        />
       </div>
     </div>
   );

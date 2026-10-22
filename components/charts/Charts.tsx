@@ -4,10 +4,13 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ComposedChart,
   Legend,
   Line,
   LineChart,
+  Pie,
+  PieChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -147,6 +150,73 @@ export function BarLineChart({ data, bar, line }: { data: Record<string, number 
           <Line isAnimationActive={false} yAxisId="r" type="monotone" dataKey={line.key} name={line.name} stroke={line.color} strokeWidth={2} dot={false} activeDot={{ r: 4 }} connectNulls />
         </ComposedChart>
       </ResponsiveContainer>
+    </div>
+  );
+}
+
+/** Biểu đồ tròn (donut) tỉ trọng, kèm chú thích có % và giá trị */
+export function DonutChart({
+  data,
+  format,
+  centerLabel,
+}: {
+  data: { name: string; value: number; color: string }[];
+  format: ValueFormat;
+  centerLabel: string;
+}) {
+  const total = data.reduce((s, d) => s + d.value, 0);
+  const shown = data.filter((d) => d.value > 0);
+  return (
+    <div className="flex flex-col items-center gap-4">
+      <div className="relative h-52 w-52 shrink-0">
+        <ResponsiveContainer>
+          <PieChart>
+            <Pie
+              data={shown}
+              dataKey="value"
+              nameKey="name"
+              innerRadius="62%"
+              outerRadius="100%"
+              paddingAngle={shown.length > 1 ? 2 : 0}
+              stroke="#fcfcfb"
+              strokeWidth={2}
+              isAnimationActive={false}
+            >
+              {shown.map((d) => (
+                <Cell key={d.name} fill={d.color} />
+              ))}
+            </Pie>
+            <Tooltip
+              content={({ active, payload }) =>
+                active && payload?.length ? (
+                  <div className="tabular rounded-lg border border-line bg-white px-3 py-2 text-xs shadow-md">
+                    <div className="font-medium text-ink">{payload[0].name}</div>
+                    <div className="text-ink-2">
+                      {formatValue(Number(payload[0].value), format)} · {formatValue(total ? Number(payload[0].value) / total : null, "pct")}
+                    </div>
+                  </div>
+                ) : null
+              }
+            />
+          </PieChart>
+        </ResponsiveContainer>
+        <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
+          <div>
+            <div className="text-xs text-ink-3">{centerLabel}</div>
+            <div className="tabular text-sm font-semibold">{formatCompact(total)}</div>
+          </div>
+        </div>
+      </div>
+      <ul className="w-full space-y-2 text-sm">
+        {data.map((d) => (
+          <li key={d.name} className="flex items-center gap-2">
+            <span aria-hidden className="size-3 shrink-0 rounded-sm" style={{ background: d.color }} />
+            <span className="text-ink-2">{d.name}</span>
+            <span className="tabular ml-auto text-xs text-ink-3">{formatValue(d.value, format)}</span>
+            <span className="tabular w-16 text-right font-semibold">{formatValue(total ? d.value / total : null, "pct")}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

@@ -5,10 +5,8 @@ import { usePathname, useSearchParams } from "next/navigation";
 
 const LINKS = [
   { href: "/", label: "Tổng quan" },
-  { href: "/awareness", label: "Awareness" },
-  { href: "/traffic", label: "Traffic" },
-  { href: "/lead", label: "Lead" },
-  { href: "/campaigns", label: "Chi tiết campaign" },
+  { href: "/meta", label: "Meta" },
+  { href: "/google", label: "Google" },
 ];
 
 /** Menu giữ nguyên bộ lọc (query string) khi chuyển trang */

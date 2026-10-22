@@ -41,8 +41,9 @@ middleware.ts               ← chặn trang khi chưa đăng nhập
 app/
   login/, auth/callback/, auth/signout/, no-access/
   (dashboard)/              ← layout chung: menu, bộ lọc, banner sync, chân trang
-    page.tsx                ← 1. Tổng quan
-    awareness/  traffic/  lead/  campaigns/
+    page.tsx                ← Tổng quan (Meta + Google, tỉ trọng chi tiêu, đối chiếu, KPI)
+    meta/page.tsx           ← Meta: chỉ số, đối tượng (tuổi × giới tính), khu vực, Campaign → Ad set → Ad
+    google/page.tsx         ← Google: chỉ số, từ khóa đang chi tiêu, Campaign → Ad group
 components/                 ← KpiCard, DataTable (sort/lọc/CSV), FilterBar, biểu đồ, phễu…
 ```
 
@@ -173,6 +174,10 @@ Mỗi client nên có **1 project Supabase riêng và 1 project Vercel riêng** 
 
 ## Quy tắc tính metric
 
+- **Tổng quan = Meta + Google.** Mọi chỉ số cộng được (spend, impressions, clicks, mess) trên trang Tổng quan bằng tổng hai trang Meta và Google cùng bộ lọc. Bảng "Đối chiếu theo nền tảng" thể hiện điều này.
+- Breakdown đối tượng / khu vực lấy từ `daily_breakdown`. Meta có thể bỏ bớt data khi breakdown, nên tổng breakdown có thể lệch nhẹ so với tổng campaign.
+- Bảng từ khóa chỉ gồm campaign Search. Cột "Cảnh báo" gắn nhãn từ khóa có spend nhưng 0 chuyển đổi, hoặc Quality Score ≤ 4.
+
 Toàn bộ nằm trong `lib/metrics.ts` và có unit test.
 
 | Metric | Công thức (trên **tổng** của kỳ / của mỗi điểm biểu đồ) |
@@ -201,9 +206,11 @@ Job sync (ngoài app) dùng `service_role` và cần ghi những dữ liệu sau
 | Bảng | Ghi gì | Khóa upsert |
 |---|---|---|
 | `campaigns` | platform, campaign_id, tên, objective_native, **objective_group** (Awareness / Traffic / Lead / Chưa phân loại), status | `(platform, campaign_id)` |
-| `daily_performance` | 1 dòng / ngày / ad set (ad group). `date` theo múi giờ tài khoản quảng cáo. Meta `video_views` = `video_play_actions`. Google `mess` = 0 | `(date, platform, adset_id)` |
+| `daily_performance` | **Meta: 1 dòng / ngày / ad** (`ad_id`, `ad_name`). **Google: 1 dòng / ngày / ad group** (`ad_id = ''`). `date` theo múi giờ tài khoản quảng cáo. Meta `video_views` = `video_play_actions`. Google `mess` = 0 | `(date, platform, adset_id, ad_id)` |
+| `daily_breakdown` | Meta, cấp campaign / ngày. `breakdown_type = 'age_gender'`: value1 = nhóm tuổi, value2 = `female` / `male` / `unknown` (Insights breakdowns `age,gender`). `breakdown_type = 'region'`: value1 = tên region, value2 = `''` (breakdown `region`). Gồm spend, impressions, link_clicks, mess | `(date, platform, campaign_id, breakdown_type, value1, value2)` |
+| `keyword_performance` | Google Search, 1 dòng / ngày / từ khóa (`keyword_view`): campaign_id, ad_group_id, keyword_id, keyword_text, match_type (`EXACT`/`PHRASE`/`BROAD`), status, spend, impressions, clicks, conversions, quality_score | `(date, ad_group_id, keyword_id)` |
 | `period_reach` | Mỗi ngày ghi lại reach/frequency cho **4 kỳ chuẩn và kỳ so sánh** của từng kỳ: toàn tài khoản (`campaign_id = null`) **cho từng nền tảng** và từng campaign. Lấy trực tiếp từ API (Meta insights với `time_range`), **không tự cộng**. `period_type` dùng: `last_7d`, `last_30d`, `this_month`, `last_month`, `compare` | `(platform, date_from, date_to, coalesce(campaign_id,''))` |
-| `targets` | month (ngày 01), objective_group, budget, kpi_metric (`impressions`, `link_clicks`, `mess`, `video_views`, `cpm`, `cpc`, `ctr`, `cost_per_mess`), kpi_target (giá trị cả tháng) | `(month, objective_group)` |
+| `targets` | month (ngày 01), objective_group, budget, kpi_metric, kpi_target (giá trị cả tháng). KPI hiện dùng: Awareness = `impressions`, Traffic = `link_clicks`, Lead = `mess` (app vẫn hỗ trợ `video_views`, `cpm`, `cpc`, `ctr`, `cost_per_mess` nếu cần) | `(month, objective_group)` |
 | `sync_log` | Mỗi lần chạy, ghi 1 dòng cho mỗi nền tảng: `status` = success / error / partial, rows_written, error | – |
 
 Cách tính các kỳ: xem `resolveRange()` và `previousPeriod()` trong `lib/filters.ts`. Job sync nên import lại 2 hàm này để ngày khớp tuyệt đối với app.

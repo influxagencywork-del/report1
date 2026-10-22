@@ -4,11 +4,13 @@ import type { Granularity } from "./metrics";
 
 const { locale, currency, timezone } = clientConfig;
 
-export type ValueFormat = "money" | "int" | "pct" | "dec" | "text";
+export type ValueFormat = "money" | "int" | "pct" | "dec" | "num" | "text";
 
 const moneyFmt = new Intl.NumberFormat(locale, { style: "currency", currency, maximumFractionDigits: 0 });
 const intFmt = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });
 const decFmt = new Intl.NumberFormat(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+/** Số có thể lẻ (vd chuyển đổi Google): chỉ hiện phần thập phân khi có */
+const numFmt = new Intl.NumberFormat(locale, { maximumFractionDigits: 2 });
 
 export const EMPTY = "—";
 
@@ -41,6 +43,8 @@ export function formatValue(v: number | string | null | undefined, f: ValueForma
       return formatPct(v);
     case "dec":
       return formatDec(v);
+    case "num":
+      return v === null || v === undefined || !Number.isFinite(v) ? EMPTY : numFmt.format(v);
     default:
       return v === null || v === undefined ? EMPTY : String(v);
   }

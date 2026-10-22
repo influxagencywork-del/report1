@@ -124,7 +124,7 @@ export function DataTable({
             />
           )}
           {filters.map((f) => {
-            const opts = [...new Set(rows.map((r) => r[f.key]).filter((v): v is string | number => v !== null))].map(String).sort();
+            const opts = [...new Set(rows.map((r) => r[f.key]).filter((v): v is string | number => v !== null && v !== ""))].map(String).sort();
             return (
               <select
                 key={f.key}

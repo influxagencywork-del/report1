@@ -1,12 +1,28 @@
 import { clientConfig } from "@/config/client";
-import { HorizontalBarChart, StackedBarChart } from "@/components/charts/Charts";
+import { DonutChart, HorizontalBarChart, StackedBarChart } from "@/components/charts/Charts";
+import { DataTable, type Column } from "@/components/DataTable";
 import { EmptyState, KpiCard, Panel } from "@/components/KpiCard";
 import { KpiTable } from "@/components/KpiTable";
 import { loadDashboard } from "@/lib/data";
 import type { SearchParams } from "@/lib/filters";
 import { formatMoney, formatPct } from "@/lib/format";
 import { groupTotals, OBJECTIVE_GROUPS, pacing, PLATFORM_LABEL, proratedBudget } from "@/lib/metrics";
-import { chartSeries, periodMetrics } from "@/lib/report";
+import { chartSeries, periodMetrics, platformTable } from "@/lib/report";
+
+const PLATFORM_COLUMNS: Column[] = [
+  { key: "name", label: "Nền tảng", format: "text" },
+  { key: "spend", label: "Spend", format: "money" },
+  { key: "spend_share", label: "% Spend", format: "pct" },
+  { key: "spend_change", label: "± Spend", format: "change", metric: "spend" },
+  { key: "impressions", label: "Impressions", format: "int" },
+  { key: "impressions_change", label: "± Impr.", format: "change", metric: "impressions" },
+  { key: "cpm", label: "CPM", format: "money" },
+  { key: "link_clicks", label: "Link clicks", format: "int" },
+  { key: "ctr", label: "CTR", format: "pct" },
+  { key: "cpc", label: "CPC", format: "money" },
+  { key: "mess", label: "Mess", format: "int" },
+  { key: "cost_per_mess", label: "Cost per mess", format: "money" },
+];
 
 export default async function OverviewPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   const d = await loadDashboard(await searchParams);
@@ -29,6 +45,12 @@ export default async function OverviewPage({ searchParams }: { searchParams: Pro
   for (const [k, c] of d.scoped) groupMap.set(k, c.objective_group);
   const byGroup = groupTotals(d.rows, (r) => groupMap.get(`${r.platform}:${r.campaign_id}`) ?? "Chưa phân loại");
   const groupBars = OBJECTIVE_GROUPS.filter((g) => byGroup.has(g)).map((g) => ({ label: g, value: byGroup.get(g)!.spend }));
+
+  // Tỉ trọng chi tiêu & bảng đối chiếu: Tổng quan = Meta + Google
+  const byPlatform = groupTotals(d.rows, (r) => r.platform);
+  const donut = d.platforms.map((p) => ({ name: PLATFORM_LABEL[p], value: byPlatform.get(p)?.spend ?? 0, color: clientConfig.platformColors[p] }));
+  const platforms = platformTable(d);
+  const platformColumns = PLATFORM_COLUMNS.filter((c) => filters.compare || c.format !== "change");
 
   if (d.scoped.size === 0) return <EmptyState>Không có campaign nào khớp bộ lọc.</EmptyState>;
 
@@ -84,6 +106,17 @@ export default async function OverviewPage({ searchParams }: { searchParams: Pro
             <StackedBarChart data={stacked} series={stackSeries} />
           </Panel>
         </div>
+        <Panel title="Tỉ trọng chi tiêu theo nền tảng" subtitle="% trên tổng spend của kỳ đang lọc">
+          <DonutChart data={donut} format="money" centerLabel="Tổng spend" />
+        </Panel>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="min-w-0 lg:col-span-2">
+          <Panel title="Đối chiếu theo nền tảng" subtitle="Dòng Tổng = Meta + Google, khớp với các thẻ ở trên và với trang Meta / Google.">
+            <DataTable columns={platformColumns} rows={platforms.rows} totals={platforms.totals} initialSort={{ key: "spend", dir: "desc" }} />
+          </Panel>
+        </div>
         <Panel title="Spend theo nhóm mục tiêu">
           <HorizontalBarChart data={groupBars} format="money" name="Spend" />
         </Panel>
@@ -91,7 +124,7 @@ export default async function OverviewPage({ searchParams }: { searchParams: Pro
 
       <Panel
         title="KPI theo nhóm mục tiêu"
-        subtitle="Mục tiêu khối lượng và ngân sách được chia theo số ngày của kỳ. Với chỉ số chi phí, % đạt = mục tiêu ÷ thực tế."
+        subtitle="Mục tiêu tháng và ngân sách được chia theo số ngày của kỳ. % đạt = thực tế ÷ mục tiêu."
       >
         <KpiTable data={d} groups={groups} />
       </Panel>

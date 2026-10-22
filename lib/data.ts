@@ -92,13 +92,14 @@ async function fetchPerf(from: ISODate, to: ISODate, platforms: Platform[], camp
   for (let offset = 0; ; offset += PAGE) {
     let q = supabase
       .from("daily_performance")
-      .select("date, platform, campaign_id, adset_id, adset_name, spend, impressions, link_clicks, video_views, mess")
+      .select("date, platform, campaign_id, adset_id, adset_name, ad_id, ad_name, spend, impressions, link_clicks, video_views, mess")
       .gte("date", from)
       .lte("date", to)
       .in("campaign_id", campaignIds)
       .order("date")
       .order("platform")
       .order("adset_id")
+      .order("ad_id")
       .range(offset, offset + PAGE - 1);
     if (platforms.length) q = q.in("platform", platforms);
     const { data, error } = await q;
@@ -161,9 +162,9 @@ export interface DashboardData {
 
 /**
  * Nạp toàn bộ data cho 1 trang.
- * @param scopeGroup Giới hạn thêm theo nhóm mục tiêu của trang (vd trang Awareness).
+ * @param opts.platform Trang của riêng 1 nền tảng (Meta / Google): bỏ qua bộ lọc nền tảng trên URL.
  */
-export async function loadDashboard(searchParams: SearchParams, scopeGroup?: ObjectiveGroup): Promise<DashboardData> {
+export async function loadDashboard(searchParams: SearchParams, opts: { platform?: Platform } = {}): Promise<DashboardData> {
   const today = todayInTz(clientConfig.timezone);
   const filters = parseFilters(searchParams, today, clientConfig.defaultRange);
   const campaigns = await getCampaigns();
@@ -171,14 +172,13 @@ export async function loadDashboard(searchParams: SearchParams, scopeGroup?: Obj
   const scoped = new Map<string, CampaignRow>();
   for (const c of campaigns) {
     const key = campaignKey(c.platform, c.campaign_id);
-    if (filters.platforms.length && !filters.platforms.includes(c.platform)) continue;
+    if (opts.platform ? c.platform !== opts.platform : filters.platforms.length && !filters.platforms.includes(c.platform)) continue;
     if (filters.groups.length && !filters.groups.includes(c.objective_group)) continue;
     if (filters.campaigns.length && !filters.campaigns.includes(key)) continue;
-    if (scopeGroup && c.objective_group !== scopeGroup) continue;
     scoped.set(key, c);
   }
   const ids = [...new Set([...scoped.values()].map((c) => c.campaign_id))];
-  const platforms = filters.platforms.length ? filters.platforms : PLATFORMS;
+  const platforms = opts.platform ? [opts.platform] : filters.platforms.length ? filters.platforms : PLATFORMS;
   const inScope = (r: PerfRow) => scoped.has(campaignKey(r.platform, r.campaign_id));
 
   const standard = isStandardPeriod(filters);
@@ -208,4 +208,73 @@ export async function loadDashboard(searchParams: SearchParams, scopeGroup?: Obj
     reach,
     standard,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Breakdown (đối tượng / khu vực) và từ khóa: gộp phía DB qua RPC (RLS vẫn áp dụng)
+// ---------------------------------------------------------------------------
+
+export interface BreakdownRow {
+  campaign_id: string;
+  value1: string;
+  value2: string;
+  spend: number;
+  impressions: number;
+  link_clicks: number;
+  mess: number;
+}
+
+export async function fetchBreakdown(
+  platform: Platform,
+  type: "age_gender" | "region",
+  from: ISODate,
+  to: ISODate,
+  campaignIds: string[],
+): Promise<BreakdownRow[]> {
+  if (!campaignIds.length) return [];
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("breakdown_summary", {
+    p_platform: platform,
+    p_type: type,
+    p_from: from,
+    p_to: to,
+    p_campaign_ids: campaignIds,
+  });
+  if (error) throw error;
+  return ((data ?? []) as BreakdownRow[]).map((r) => ({
+    ...r,
+    spend: Number(r.spend),
+    impressions: Number(r.impressions),
+    link_clicks: Number(r.link_clicks),
+    mess: Number(r.mess),
+  }));
+}
+
+export interface KeywordRow {
+  campaign_id: string;
+  ad_group_id: string;
+  keyword_id: string;
+  keyword_text: string;
+  match_type: string;
+  status: string | null;
+  spend: number;
+  impressions: number;
+  clicks: number;
+  conversions: number;
+  quality_score: number | null;
+}
+
+export async function fetchKeywords(from: ISODate, to: ISODate, campaignIds: string[]): Promise<KeywordRow[]> {
+  if (!campaignIds.length) return [];
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("keyword_summary", { p_from: from, p_to: to, p_campaign_ids: campaignIds });
+  if (error) throw error;
+  return ((data ?? []) as KeywordRow[]).map((r) => ({
+    ...r,
+    spend: Number(r.spend),
+    impressions: Number(r.impressions),
+    clicks: Number(r.clicks),
+    conversions: Number(r.conversions),
+    quality_score: r.quality_score === null ? null : Number(r.quality_score),
+  }));
 }

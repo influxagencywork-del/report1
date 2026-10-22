@@ -58,8 +58,11 @@ export function FilterBar({ campaigns }: { campaigns: CampaignOption[] }) {
     update({ range });
   }
 
+  // Trang Meta / Google cố định nền tảng → ẩn bộ lọc nền tảng, chỉ liệt kê campaign của nền tảng đó
+  const pagePlatform = PLATFORMS.find((p) => pathname === `/${p}` || pathname.startsWith(`/${p}/`));
+  const platformScope = pagePlatform ? [pagePlatform] : f.platforms;
   const campaignOptions = campaigns
-    .filter((c) => (!f.platforms.length || f.platforms.includes(c.platform)) && (!f.groups.length || f.groups.includes(c.group)))
+    .filter((c) => (!platformScope.length || platformScope.includes(c.platform)) && (!f.groups.length || f.groups.includes(c.group)))
     .map((c) => ({ value: c.key, label: c.name, hint: `${PLATFORM_LABEL[c.platform]} · ${c.group}` }));
 
   const isDefault = !sp.toString() || sp.toString() === `range=${clientConfig.defaultRange}`;
@@ -122,6 +125,7 @@ export function FilterBar({ campaigns }: { campaigns: CampaignOption[] }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        {!pagePlatform && (
         <MultiSelect
           label="Nền tảng"
           width="w-48"
@@ -129,6 +133,7 @@ export function FilterBar({ campaigns }: { campaigns: CampaignOption[] }) {
           value={f.platforms}
           onChange={(v) => update({ platforms: v.length === PLATFORMS.length ? [] : (v as Platform[]) })}
         />
+        )}
         <MultiSelect
           label="Nhóm mục tiêu"
           width="w-56"
