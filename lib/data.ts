@@ -38,7 +38,9 @@ export const isAllowed = cache(async () => {
   const user = await getUser();
   if (!user?.email) return false;
   const supabase = await createClient();
-  const { data } = await supabase.from("allowed_users").select("email").eq("email", user.email.toLowerCase()).maybeSingle();
+  const { data, error } = await supabase.from("allowed_users").select("email").eq("email", user.email.toLowerCase()).maybeSingle();
+  // Lỗi kết nối KHÔNG được hiểu là "không có quyền" → ném lỗi để hiện trang báo lỗi + nút thử lại
+  if (error) throw new Error(`Không kiểm tra được quyền truy cập: ${error.message}`);
   return !!data;
 });
 
